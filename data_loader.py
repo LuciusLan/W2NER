@@ -157,7 +157,7 @@ def process_bert(data, tokenizer, vocab):
         
         for entity in instance["entities"]:
             index = list(range(entity['start'], entity['end']))#entity["index"] 
-            _grid_labels_boundary[index[0], index[-1]] = vocab.label_to_id(entity["type"])
+            _grid_labels_boundary[index[-1], index[0]] = vocab.label_to_id(entity["type"])
 
         _entity_text = set([utils.convert_index_to_text(list(range(e['start'], e['end'])), vocab.label_to_id(e["type"]))
                             for e in instance["entities"]])
@@ -171,7 +171,7 @@ def process_bert(data, tokenizer, vocab):
         pieces2word.append(_pieces2word)
         entity_text.append(_entity_text)
 
-    return bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text
+    return bert_inputs, grid_labels_boundary, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text
 
 
 def fill_vocab(vocab, dataset):

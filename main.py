@@ -109,12 +109,13 @@ class Trainer(object):
                 bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length = data_batch
 
                 outputs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
+
                 length = sent_length
 
                 grid_mask2d = grid_mask2d.clone()
 
                 outputs = torch.argmax(outputs, -1)
-                ent_c, ent_p, ent_r, _ = utils.decode(outputs.cpu().numpy(), entity_text, length.cpu().numpy())
+                ent_c, ent_p, ent_r, _ = utils.decode_boundary(outputs.cpu().numpy(), entity_text, length.cpu().numpy())
 
                 total_ent_r += ent_r
                 total_ent_p += ent_p
@@ -174,14 +175,17 @@ class Trainer(object):
                 grid_mask2d = grid_mask2d.clone()
 
                 outputs = torch.argmax(outputs, -1)
-                ent_c, ent_p, ent_r, decode_entities = utils.decode(outputs.cpu().numpy(), entity_text, length.cpu().numpy())
+                ent_c, ent_p, ent_r, decode_entities = utils.decode_boundary(outputs.cpu().numpy(), entity_text, length.cpu().numpy())
 
                 for ent_list, sentence in zip(decode_entities, sentence_batch):
-                    sentence = sentence["sentence"]
-                    instance = {"sentence": sentence, "entity": []}
+                    tokens = sentence["tokens"]
+                    instance = {"sentence": tokens, "entity": []}
                     for ent in ent_list:
-                        instance["entity"].append({"text": [sentence[x] for x in ent[0]],
-                                                   "type": config.vocab.id_to_label(ent[1])})
+                        try:
+                            instance["entity"].append({"text": [tokens[x] for x in ent[0]],
+                                                    "type": config.vocab.id_to_label(ent[1])})
+                        except IndexError:
+                            print()
                     result.append(instance)
 
                 total_ent_r += ent_r
@@ -308,7 +312,7 @@ if __name__ == '__main__':
 
     trainer = Trainer(model)
 
-    best_f1 = 0
+    """best_f1 = 0
     best_test_f1 = 0
     for i in range(config.epochs):
         logger.info("Epoch: {}".format(i))
@@ -322,6 +326,6 @@ if __name__ == '__main__':
             trainer.save(config.save_path)
         torch.cuda.empty_cache()
     logger.info("Best DEV F1: {:3.4f}".format(best_f1))
-    logger.info("Best TEST F1: {:3.4f}".format(best_test_f1))
+    logger.info("Best TEST F1: {:3.4f}".format(best_test_f1))"""
     trainer.load(config.save_path)
     trainer.predict("Final", test_loader, ori_data[-1])

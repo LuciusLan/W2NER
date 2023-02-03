@@ -286,9 +286,16 @@ class BaselineModel(nn.Module):
             bert_embs = bert_embs[0]
 
         length = pieces2word.size(1)
+        min_value = torch.min(bert_embs).item()
+        # Max pooling word representations from pieces
+        _bert_embs = bert_embs.unsqueeze(1).expand(-1, length, -1, -1)
+        _bert_embs = torch.masked_fill(_bert_embs, pieces2word.eq(0).unsqueeze(-1), min_value)
+        word_reps, _ = torch.max(_bert_embs, dim=2)
 
-        h = self.dropout(self.mlp1(bert_embs))
-        t = self.dropout(self.mlp2(bert_embs))
+        word_reps = self.dropout(word_reps)
+
+        h = self.dropout(self.mlp1(word_reps))
+        t = self.dropout(self.mlp2(word_reps))
         outputs = self.biaffine(h, t)
 
         return outputs
