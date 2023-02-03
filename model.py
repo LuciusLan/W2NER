@@ -251,3 +251,44 @@ class Model(nn.Module):
         outputs = self.predictor(word_reps, word_reps, conv_outputs)
 
         return outputs
+
+class BaselineModel(nn.Module):
+    def __init__(self, config):
+        super(BaselineModel, self).__init__()
+        self.use_bert_last_4_layers = config.use_bert_last_4_layers
+
+        self.lstm_hid_size = config.lstm_hid_size
+        self.conv_hid_size = config.conv_hid_size
+
+        lstm_input_size = 0
+
+        self.bert = AutoModel.from_pretrained(config.bert_name, cache_dir="./cache/", output_hidden_states=True)
+        lstm_input_size += config.bert_hid_size
+
+        self.mlp1 = MLP(n_in=config.bert_hid_size, n_out=config.biaffine_size, dropout=config.out_dropout)
+        self.mlp2 = MLP(n_in=config.bert_hid_size, n_out=config.biaffine_size, dropout=config.out_dropout)
+        self.biaffine = Biaffine(n_in=config.biaffine_size, n_out=config.label_num, bias_x=True, bias_y=True)
+        self.dropout = nn.Dropout(config.out_dropout)
+
+    def forward(self, bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length):
+        '''
+        :param bert_inputs: [B, L']
+        :param grid_mask2d: [B, L, L]
+        :param dist_inputs: [B, L, L]
+        :param pieces2word: [B, L, L']
+        :param sent_length: [B]
+        :return:
+        '''
+        bert_embs = self.bert(input_ids=bert_inputs, attention_mask=bert_inputs.ne(0).float())
+        if self.use_bert_last_4_layers:
+            bert_embs = torch.stack(bert_embs[2][-4:], dim=-1).mean(-1)
+        else:
+            bert_embs = bert_embs[0]
+
+        length = pieces2word.size(1)
+
+        h = self.dropout(self.mlp1(bert_embs))
+        t = self.dropout(self.mlp2(bert_embs))
+        outputs = self.biaffine(h, t)
+
+        return outputs

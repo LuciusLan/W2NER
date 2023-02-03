@@ -50,7 +50,7 @@ class Vocabulary(object):
     def id_to_label(self, i):
         return self.id2label[i]
 
-def collate_fn(data):
+def custom_collate_fn(data):
     bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text = map(list, zip(*data))
 
     max_tok = np.max(sent_length)
@@ -103,6 +103,7 @@ def process_bert(data, tokenizer, vocab):
 
     bert_inputs = []
     grid_labels = []
+    grid_labels_boundary = []
     grid_mask2d = []
     dist_inputs = []
     entity_text = []
@@ -110,19 +111,20 @@ def process_bert(data, tokenizer, vocab):
     sent_length = []
 
     for index, instance in enumerate(data):
-        if len(instance['sentence']) == 0:
+        if len(instance['tokens']) == 0:
             continue
 
-        tokens = [tokenizer.tokenize(word) for word in instance['sentence']]
+        tokens = [tokenizer.tokenize(word) for word in instance['tokens']]
         pieces = [piece for pieces in tokens for piece in pieces]
         _bert_inputs = tokenizer.convert_tokens_to_ids(pieces)
         _bert_inputs = np.array([tokenizer.cls_token_id] + _bert_inputs + [tokenizer.sep_token_id])
 
-        length = len(instance['sentence'])
-        _grid_labels = np.zeros((length, length), dtype=np.int)
-        _pieces2word = np.zeros((length, len(_bert_inputs)), dtype=np.bool)
-        _dist_inputs = np.zeros((length, length), dtype=np.int)
-        _grid_mask2d = np.ones((length, length), dtype=np.bool)
+        length = len(instance['tokens'])
+        _grid_labels = np.zeros((length, length), dtype=np.int_)
+        _grid_labels_boundary = np.zeros((length, length), dtype=np.int_)
+        _pieces2word = np.zeros((length, len(_bert_inputs)), dtype=np.bool_)
+        _dist_inputs = np.zeros((length, length), dtype=np.int_)
+        _grid_mask2d = np.ones((length, length), dtype=np.bool_)
 
         if tokenizer is not None:
             start = 0
@@ -145,20 +147,25 @@ def process_bert(data, tokenizer, vocab):
                     _dist_inputs[i, j] = dis2idx[_dist_inputs[i, j]]
         _dist_inputs[_dist_inputs == 0] = 19
 
-        for entity in instance["ner"]:
-            index = entity["index"]
+        for entity in instance["entities"]:
+            index = list(range(entity['start'], entity['end']))#entity["index"] 
             for i in range(len(index)):
                 if i + 1 >= len(index):
                     break
                 _grid_labels[index[i], index[i + 1]] = 1
             _grid_labels[index[-1], index[0]] = vocab.label_to_id(entity["type"])
+        
+        for entity in instance["entities"]:
+            index = list(range(entity['start'], entity['end']))#entity["index"] 
+            _grid_labels_boundary[index[0], index[-1]] = vocab.label_to_id(entity["type"])
 
-        _entity_text = set([utils.convert_index_to_text(e["index"], vocab.label_to_id(e["type"]))
-                            for e in instance["ner"]])
+        _entity_text = set([utils.convert_index_to_text(list(range(e['start'], e['end'])), vocab.label_to_id(e["type"]))
+                            for e in instance["entities"]])
 
         sent_length.append(length)
         bert_inputs.append(_bert_inputs)
         grid_labels.append(_grid_labels)
+        grid_labels_boundary.append(_grid_labels_boundary)
         grid_mask2d.append(_grid_mask2d)
         dist_inputs.append(_dist_inputs)
         pieces2word.append(_pieces2word)
@@ -170,9 +177,9 @@ def process_bert(data, tokenizer, vocab):
 def fill_vocab(vocab, dataset):
     entity_num = 0
     for instance in dataset:
-        for entity in instance["ner"]:
+        for entity in instance["entities"]:
             vocab.add_label(entity["type"])
-        entity_num += len(instance["ner"])
+        entity_num += len(instance["entities"])
     return entity_num
 
 
@@ -191,7 +198,7 @@ def load_data_bert(config):
     dev_ent_num = fill_vocab(vocab, dev_data)
     test_ent_num = fill_vocab(vocab, test_data)
 
-    table = pt.PrettyTable([config.dataset, 'sentences', 'entities'])
+    table = pt.PrettyTable([config.dataset, 'tokens', 'entities'])
     table.add_row(['train', len(train_data), train_ent_num])
     table.add_row(['dev', len(dev_data), dev_ent_num])
     table.add_row(['test', len(test_data), test_ent_num])

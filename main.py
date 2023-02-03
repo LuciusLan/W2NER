@@ -8,9 +8,12 @@ import torch.nn as nn
 import transformers
 from sklearn.metrics import precision_recall_fscore_support, f1_score
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
+from tqdm import tqdm
 
 import config
 import data_loader
+from data_loader import custom_collate_fn
 import utils
 from model import Model
 
@@ -42,10 +45,11 @@ class Trainer(object):
 
     def train(self, epoch, data_loader):
         self.model.train()
+        tr_loss = utils.AverageMeter()
         loss_list = []
         pred_result = []
         label_result = []
-
+        pbar = tqdm(total=len(data_loader), desc=f"Train epoch{epoch}")
         for i, data_batch in enumerate(data_loader):
             data_batch = [data.cuda() for data in data_batch[:-1]]
 
@@ -71,6 +75,10 @@ class Trainer(object):
             pred_result.append(outputs)
 
             self.scheduler.step()
+            tr_loss.update(loss.cpu().item(), n=bert_inputs.size(0))
+            pbar.update()
+            pbar.set_postfix({'loss': tr_loss.avg})
+            tb_writter.add_scalar("Loss/train", loss, i*(epoch+1))
 
         label_result = torch.cat(label_result)
         pred_result = torch.cat(pred_result)
@@ -95,7 +103,7 @@ class Trainer(object):
         total_ent_p = 0
         total_ent_c = 0
         with torch.no_grad():
-            for i, data_batch in enumerate(data_loader):
+            for i, data_batch in tqdm(enumerate(data_loader), total=len(data_loader)):
                 entity_text = data_batch[-1]
                 data_batch = [data.cuda() for data in data_batch[:-1]]
                 bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length = data_batch
@@ -134,6 +142,8 @@ class Trainer(object):
         table = pt.PrettyTable(["{} {}".format(title, epoch), 'F1', "Precision", "Recall"])
         table.add_row(["Label"] + ["{:3.4f}".format(x) for x in [f1, p, r]])
         table.add_row(["Entity"] + ["{:3.4f}".format(x) for x in [e_f1, e_p, e_r]])
+        tb_writter.add_scalar("Label F1/dev", f1, epoch)
+        tb_writter.add_scalar("NER F1/dev", e_f1, epoch)
 
         logger.info("\n{}".format(table))
         return e_f1
@@ -273,16 +283,22 @@ if __name__ == '__main__':
     logger.info("Loading Data")
     datasets, ori_data = data_loader.load_data_bert(config)
 
-    train_loader, dev_loader, test_loader = (
+    tb_writter = SummaryWriter()
+
+    
+    """train_loader, dev_loader, test_loader = (
         DataLoader(dataset=dataset,
                    batch_size=config.batch_size,
                    collate_fn=data_loader.collate_fn,
                    shuffle=i == 0,
-                   num_workers=4,
+                   num_workers=1,
                    drop_last=i == 0)
         for i, dataset in enumerate(datasets)
-    )
-
+    )"""
+    train_loader, dev_loader, test_loader = datasets
+    train_loader = DataLoader(dataset=train_loader, batch_size=config.batch_size, collate_fn=custom_collate_fn)
+    dev_loader = DataLoader(dataset=dev_loader, batch_size=config.batch_size, collate_fn=custom_collate_fn)
+    test_loader = DataLoader(dataset=test_loader, batch_size=config.batch_size, collate_fn=custom_collate_fn)
     updates_total = len(datasets[0]) // config.batch_size * config.epochs
 
     logger.info("Building Model")
@@ -297,12 +313,14 @@ if __name__ == '__main__':
     for i in range(config.epochs):
         logger.info("Epoch: {}".format(i))
         trainer.train(i, train_loader)
+        torch.cuda.empty_cache()
         f1 = trainer.eval(i, dev_loader)
         test_f1 = trainer.eval(i, test_loader, is_test=True)
         if f1 > best_f1:
             best_f1 = f1
             best_test_f1 = test_f1
             trainer.save(config.save_path)
+        torch.cuda.empty_cache()
     logger.info("Best DEV F1: {:3.4f}".format(best_f1))
     logger.info("Best TEST F1: {:3.4f}".format(best_test_f1))
     trainer.load(config.save_path)
