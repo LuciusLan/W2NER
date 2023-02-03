@@ -15,7 +15,7 @@ import config
 import data_loader
 from data_loader import custom_collate_fn
 import utils
-from model import Model
+from model import Model, BaselineModel
 
 
 class Trainer(object):
@@ -302,7 +302,7 @@ if __name__ == '__main__':
     updates_total = len(datasets[0]) // config.batch_size * config.epochs
 
     logger.info("Building Model")
-    model = Model(config)
+    model = BaselineModel(config)
 
     model = model.cuda()
 
