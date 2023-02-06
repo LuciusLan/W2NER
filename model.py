@@ -262,7 +262,7 @@ class BaselineModel(nn.Module):
 
         lstm_input_size = 0
 
-        self.bert = AutoModel.from_pretrained(config.bert_name, cache_dir="./cache/", output_hidden_states=True)
+        self.bert = AutoModel.from_pretrained(config.bert_name, cache_dir="D:/Dev", output_hidden_states=True)
         lstm_input_size += config.bert_hid_size
 
         self.mlp1 = MLP(n_in=config.bert_hid_size, n_out=config.biaffine_size, dropout=config.out_dropout)

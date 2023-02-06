@@ -3,9 +3,11 @@ import torch
 from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 import numpy as np
+from scipy import ndimage
 import prettytable as pt
 from gensim.models import KeyedVectors
 from transformers import AutoTokenizer
+from tqdm import tqdm
 import os
 import utils
 import requests
@@ -110,7 +112,7 @@ def process_bert(data, tokenizer, vocab):
     pieces2word = []
     sent_length = []
 
-    for index, instance in enumerate(data):
+    for index, instance in tqdm(enumerate(data), total=len(data)):
         if len(instance['tokens']) == 0:
             continue
 
@@ -122,6 +124,7 @@ def process_bert(data, tokenizer, vocab):
         length = len(instance['tokens'])
         _grid_labels = np.zeros((length, length), dtype=np.int_)
         _grid_labels_boundary = np.zeros((length, length), dtype=np.int_)
+        dist_map = np.ones((length, length), dtype=np.int_)
         _pieces2word = np.zeros((length, len(_bert_inputs)), dtype=np.bool_)
         _dist_inputs = np.zeros((length, length), dtype=np.int_)
         _grid_mask2d = np.ones((length, length), dtype=np.bool_)
@@ -158,14 +161,58 @@ def process_bert(data, tokenizer, vocab):
         for entity in instance["entities"]:
             index = list(range(entity['start'], entity['end']))#entity["index"] 
             _grid_labels_boundary[index[-1], index[0]] = vocab.label_to_id(entity["type"])
+            dist_map[index[-1], index[0]] = 0
 
         _entity_text = set([utils.convert_index_to_text(list(range(e['start'], e['end'])), vocab.label_to_id(e["type"]))
                             for e in instance["entities"]])
+        dir_map = _grid_labels_boundary.copy()
+        dist_map = ndimage.distance_transform_edt(dist_map)
+        dist_map = np.pad(dist_map, (1,1), constant_values=100)
+        
+        """
+        Create direction map
+        7 10 12
+        8  x 13
+        9 11 14
+        """
+        for ir, row in enumerate(dist_map):
+            if ir == 0 or ir == dist_map.shape[0] -1:
+                continue
+            for ic, col in enumerate(row):
+                if ic == 0 or ic == dist_map.shape[0] -1:
+                    continue
+                try:
+                    local_window = dist_map[ir-1:ir+2, ic-1:ic+2]
+                except IndexError:
+                    local_window = []
+                min_index = divmod(local_window.argmin(), local_window.shape[1])
+                min_dir = -1
+                if min_index == (0,0):
+                    min_dir = 7
+                elif min_index == (1,0):
+                    min_dir = 8
+                elif min_index == (2,0):
+                    min_dir = 9
+                elif min_index == (0,1):
+                    min_dir = 10
+                elif min_index == (1,1):
+                    min_dir = -1
+                elif min_index == (2,1):
+                    min_dir = 11
+                elif min_index == (0,2):
+                    min_dir = 12
+                elif min_index == (1,2):
+                    min_dir = 13
+                elif min_index == (2,2):
+                    min_dir = 14
+                
+                if min_dir != -1:
+                    dir_map[ir-1, ic-1] = min_dir
 
         sent_length.append(length)
         bert_inputs.append(_bert_inputs)
         grid_labels.append(_grid_labels)
-        grid_labels_boundary.append(_grid_labels_boundary)
+        grid_labels_boundary.append(dir_map)
         grid_mask2d.append(_grid_mask2d)
         dist_inputs.append(_dist_inputs)
         pieces2word.append(_pieces2word)
@@ -204,7 +251,7 @@ def load_data_bert(config):
     table.add_row(['test', len(test_data), test_ent_num])
     config.logger.info("\n{}".format(table))
 
-    config.label_num = len(vocab.label2id)
+    config.label_num = len(vocab.label2id) + 8
     config.vocab = vocab
 
     train_dataset = RelationDataset(*process_bert(train_data, tokenizer, vocab))

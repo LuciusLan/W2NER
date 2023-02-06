@@ -6,7 +6,7 @@ import torch
 import torch.autograd
 import torch.nn as nn
 import transformers
-from sklearn.metrics import precision_recall_fscore_support, f1_score
+from sklearn.metrics import precision_recall_fscore_support, f1_score, classification_report
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -21,7 +21,7 @@ from model import Model, BaselineModel
 class Trainer(object):
     def __init__(self, model):
         self.model = model
-        self.criterion = nn.CrossEntropyLoss()
+        self.criterion = nn.CrossEntropyLoss()#weight=torch.tensor([1., 0., 10., 10., 10., 10., 10.]).cuda()
 
         bert_params = set(self.model.bert.parameters())
         other_params = list(set(self.model.parameters()) - bert_params)
@@ -312,7 +312,7 @@ if __name__ == '__main__':
 
     trainer = Trainer(model)
 
-    """best_f1 = 0
+    best_f1 = 0
     best_test_f1 = 0
     for i in range(config.epochs):
         logger.info("Epoch: {}".format(i))
@@ -326,6 +326,6 @@ if __name__ == '__main__':
             trainer.save(config.save_path)
         torch.cuda.empty_cache()
     logger.info("Best DEV F1: {:3.4f}".format(best_f1))
-    logger.info("Best TEST F1: {:3.4f}".format(best_test_f1))"""
+    logger.info("Best TEST F1: {:3.4f}".format(best_test_f1))
     trainer.load(config.save_path)
     trainer.predict("Final", test_loader, ori_data[-1])
