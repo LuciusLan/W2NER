@@ -15,13 +15,15 @@ import config
 import data_loader
 from data_loader import custom_collate_fn
 import utils
-from model import Model, BaselineModel
+from model import Model, BaselineModel, FocalLoss
 
 
 class Trainer(object):
     def __init__(self, model):
         self.model = model
-        self.criterion = nn.CrossEntropyLoss()#weight=torch.tensor([1., 0., 10., 10., 10., 10., 10.]).cuda()
+        self.criterion = FocalLoss(gamma=2)
+                         #nn.CrossEntropyLoss(weight=torch.tensor([1., 0., 10., 10., 10., 10., 10.,
+                         #                                         1., 1., 1., 1., 1., 1., 1., 1.]).cuda())
 
         bert_params = set(self.model.bert.parameters())
         other_params = list(set(self.model.parameters()) - bert_params)
@@ -38,7 +40,7 @@ class Trainer(object):
              'weight_decay': config.weight_decay},
         ]
 
-        self.optimizer = transformers.AdamW(params, lr=config.learning_rate, weight_decay=config.weight_decay)
+        self.optimizer = torch.optim.AdamW(params, lr=config.learning_rate, weight_decay=config.weight_decay)
         self.scheduler = transformers.get_linear_schedule_with_warmup(self.optimizer,
                                                                       num_warmup_steps=config.warm_factor * updates_total,
                                                                       num_training_steps=updates_total)
@@ -306,7 +308,8 @@ if __name__ == '__main__':
     updates_total = len(datasets[0]) // config.batch_size * config.epochs
 
     logger.info("Building Model")
-    model = BaselineModel(config)
+    #model = BaselineModel(config)
+    model = Model(config)
 
     model = model.cuda()
 

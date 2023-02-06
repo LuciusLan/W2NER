@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 from transformers import AutoModel
+from typing import Optional
 
 
 class LayerNorm(nn.Module):
@@ -109,6 +110,31 @@ class ConvolutionLayer(nn.Module):
         outputs = outputs.permute(0, 2, 3, 1).contiguous()
         return outputs
 
+class AlterConv(nn.Module):
+    def __init__(self, input_size, channels, dilation, num_label, dropout=0.1) -> None:
+        super().__init__()
+        self.base = nn.Sequential(
+            nn.Dropout2d(dropout),
+            nn.Conv2d(input_size, channels, kernel_size=1),
+            nn.GELU(),
+        )
+        self.convs = nn.ModuleList([
+            nn.Conv2d(channels, channels//2, kernel_size=3, dilation=1, padding=1),
+            nn.Conv2d(channels//2, channels//4, kernel_size=3, dilation=2, padding=2),
+            nn.Conv2d(channels//4, channels//8, kernel_size=3, dilation=3, padding=3),
+            nn.Conv2d(channels//8, num_label, kernel_size=3, dilation=4, padding=4),
+            nn.Conv2d(num_label, num_label, 1)
+            ])
+        
+    def forward(self, x):
+        x = x.permute(0, 3, 1, 2).contiguous()
+        x = self.base(x)
+        for conv in self.convs:
+            x = conv(x)
+            x = F.gelu(x)
+        x = x.permute(0, 2, 3, 1).contiguous()
+        return x
+
 
 class Biaffine(nn.Module):
     def __init__(self, n_in, n_out=1, bias_x=True, bias_y=True):
@@ -165,7 +191,7 @@ class CoPredictor(nn.Module):
         self.mlp1 = MLP(n_in=hid_size, n_out=biaffine_size, dropout=dropout)
         self.mlp2 = MLP(n_in=hid_size, n_out=biaffine_size, dropout=dropout)
         self.biaffine = Biaffine(n_in=biaffine_size, n_out=cls_num, bias_x=True, bias_y=True)
-        self.mlp_rel = MLP(channels, ffnn_hid_size, dropout=dropout)
+        #self.mlp_rel = MLP(channels, ffnn_hid_size, dropout=dropout)
         self.linear = nn.Linear(ffnn_hid_size, cls_num)
         self.dropout = nn.Dropout(dropout)
 
@@ -174,8 +200,9 @@ class CoPredictor(nn.Module):
         t = self.dropout(self.mlp2(y))
         o1 = self.biaffine(h, t)
 
-        z = self.dropout(self.mlp_rel(z))
-        o2 = self.linear(z)
+        #z = self.dropout(self.mlp_rel(z))
+        #o2 = self.linear(z)
+        o2 = z
         return o1 + o2
 
 
@@ -200,7 +227,8 @@ class Model(nn.Module):
 
         conv_input_size = config.lstm_hid_size + config.dist_emb_size + config.type_emb_size
 
-        self.convLayer = ConvolutionLayer(conv_input_size, config.conv_hid_size, config.dilation, config.conv_dropout)
+        #self.convLayer = ConvolutionLayer(conv_input_size, config.conv_hid_size, config.dilation, config.conv_dropout)
+        self.convLayer = AlterConv(conv_input_size, config.conv_hid_size, config.dilation, config.label_num, config.conv_dropout)
         self.dropout = nn.Dropout(config.emb_dropout)
         self.predictor = CoPredictor(config.label_num, config.lstm_hid_size, config.biaffine_size,
                                      config.conv_hid_size * len(config.dilation), config.ffnn_hid_size,
@@ -262,13 +290,15 @@ class BaselineModel(nn.Module):
 
         lstm_input_size = 0
 
-        self.bert = AutoModel.from_pretrained(config.bert_name, cache_dir="D:/Dev", output_hidden_states=True)
+        self.bert = AutoModel.from_pretrained(config.bert_name, cache_dir="./cache/", output_hidden_states=True)
         lstm_input_size += config.bert_hid_size
 
         self.mlp1 = MLP(n_in=config.bert_hid_size, n_out=config.biaffine_size, dropout=config.out_dropout)
         self.mlp2 = MLP(n_in=config.bert_hid_size, n_out=config.biaffine_size, dropout=config.out_dropout)
         self.biaffine = Biaffine(n_in=config.biaffine_size, n_out=config.label_num, bias_x=True, bias_y=True)
         self.dropout = nn.Dropout(config.out_dropout)
+        self.conv_layers = nn.Sequential(nn.Conv2d(config.bert_hid_size, config.bert_hid_size//2))
+        self.cln = LayerNorm(config.bert_hid_size, config.bert_hid_size, conditional=True)
 
     def forward(self, bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length):
         '''
@@ -299,3 +329,87 @@ class BaselineModel(nn.Module):
         outputs = self.biaffine(h, t)
 
         return outputs
+
+class FocalLoss(torch.nn.Module):
+    """ Focal Loss, as described in https://arxiv.org/abs/1708.02002.
+    It is essentially an enhancement to cross entropy loss and is
+    useful for classification tasks when there is a large class imbalance.
+    x is expected to contain raw, unnormalized scores for each class.
+    y is expected to contain class labels.
+    Shape:
+        - x: (batch_size, C) or (batch_size, C, d1, d2, ..., dK), K > 0.
+        - y: (batch_size,) or (batch_size, d1, d2, ..., dK), K > 0.
+    """
+
+    def __init__(self,
+                 alpha: Optional[torch.Tensor] = None,
+                 gamma: float = 0.,
+                 reduction: str = 'mean',
+                 ignore_index: int = -100):
+        """Constructor.
+        Args:
+            alpha (Tensor, optional): Weights for each class. Defaults to None.
+            gamma (float, optional): A constant, as described in the paper.
+                Defaults to 0.
+            reduction (str, optional): 'mean', 'sum' or 'none'.
+                Defaults to 'mean'.
+            ignore_index (int, optional): class label to ignore.
+                Defaults to -100.
+        """
+        if reduction not in ('mean', 'sum', 'none'):
+            raise ValueError(
+                'Reduction must be one of: "mean", "sum", "none".')
+
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.ignore_index = ignore_index
+        self.reduction = reduction
+
+        self.log_softmax = torch.nn.LogSoftmax(-1)
+        self.nll_loss = torch.nn.NLLLoss(
+            weight=alpha, reduction='none', ignore_index=ignore_index)
+
+    def __repr__(self):
+        arg_keys = ['alpha', 'gamma', 'ignore_index', 'reduction']
+        arg_vals = [self.__dict__[k] for k in arg_keys]
+        arg_strs = [f'{k}={v}' for k, v in zip(arg_keys, arg_vals)]
+        arg_str = ', '.join(arg_strs)
+        return f'{type(self).__name__}({arg_str})'
+
+    def forward(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        if x.ndim > 2:
+            # (N, C, d1, d2, ..., dK) --> (N * d1 * ... * dK, C)
+            c = x.shape[1]
+            x = x.permute(0, *range(2, x.ndim), 1).reshape(-1, c)
+            # (N, d1, d2, ..., dK) --> (N * d1 * ... * dK,)
+            y = y.view(-1)
+
+        unignored_mask = y != self.ignore_index
+        y = y[unignored_mask]
+        if len(y) == 0:
+            return 0.
+        x = x[unignored_mask]
+
+        # compute weighted cross entropy term: -alpha * log(pt)
+        # (alpha is already part of self.nll_loss)
+        log_p = self.log_softmax(x)
+        ce = self.nll_loss(log_p, y)
+
+        # get true class column from each row
+        all_rows = torch.arange(len(x))
+        log_pt = log_p[all_rows, y]
+
+        # compute focal term: (1 - pt)^gamma
+        pt = log_pt.exp()
+        focal_term = (1 - pt)**self.gamma
+
+        # the full loss: -alpha * ((1 - pt)^gamma) * log(pt)
+        loss = focal_term * ce
+
+        if self.reduction == 'mean':
+            loss = loss.mean()
+        elif self.reduction == 'sum':
+            loss = loss.sum()
+
+        return loss
