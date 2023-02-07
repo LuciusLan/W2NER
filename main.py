@@ -55,12 +55,14 @@ class Trainer(object):
         for i, data_batch in enumerate(data_loader):
             data_batch = [data.cuda() for data in data_batch[:-1]]
 
-            bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length = data_batch
+            bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, dir_labels = data_batch
 
-            outputs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
+            #outputs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
+            outputs, dirs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
 
             grid_mask2d = grid_mask2d.clone()
-            loss = self.criterion(outputs[grid_mask2d], grid_labels[grid_mask2d])
+            #loss = self.criterion(outputs[grid_mask2d], grid_labels[grid_mask2d])
+            loss = self.criterion(outputs[grid_mask2d], grid_labels[grid_mask2d]) + self.criterion(dirs[grid_mask2d], dir_labels[grid_mask2d])
 
             loss.backward()
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), config.clip_grad_norm)
@@ -100,6 +102,8 @@ class Trainer(object):
 
         pred_result = []
         label_result = []
+        dir_preds = []
+        dir_targets = []
 
         total_ent_r = 0
         total_ent_p = 0
@@ -108,9 +112,10 @@ class Trainer(object):
             for i, data_batch in tqdm(enumerate(data_loader), total=len(data_loader)):
                 entity_text = data_batch[-1]
                 data_batch = [data.cuda() for data in data_batch[:-1]]
-                bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length = data_batch
+                bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, dir_labels = data_batch
 
-                outputs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
+                #outputs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
+                outputs, dirs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
 
                 length = sent_length
 
@@ -128,6 +133,12 @@ class Trainer(object):
 
                 label_result.append(grid_labels.cpu())
                 pred_result.append(outputs.cpu())
+
+                dir_labels = dir_labels[grid_mask2d].contiguous().view(-1)
+                dirs = dirs[grid_mask2d].contiguous().view(-1)
+
+                dir_targets.append(dir_labels.cpu())
+                dir_preds.append(dirs.cpu())
 
         label_result = torch.cat(label_result)
         pred_result = torch.cat(pred_result)
@@ -169,9 +180,10 @@ class Trainer(object):
                 sentence_batch = data[i:i+config.batch_size]
                 entity_text = data_batch[-1]
                 data_batch = [data.cuda() for data in data_batch[:-1]]
-                bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length = data_batch
+                bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, dir_labels = data_batch
 
-                outputs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
+                #outputs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
+                outputs, dirs = model(bert_inputs, grid_mask2d, dist_inputs, pieces2word, sent_length)
                 length = sent_length
 
                 grid_mask2d = grid_mask2d.clone()
@@ -308,8 +320,8 @@ if __name__ == '__main__':
     updates_total = len(datasets[0]) // config.batch_size * config.epochs
 
     logger.info("Building Model")
-    #model = BaselineModel(config)
-    model = Model(config)
+    model = BaselineModel(config)
+    #model = Model(config)
 
     model = model.cuda()
 

@@ -295,7 +295,8 @@ class BaselineModel(nn.Module):
 
         self.mlp1 = MLP(n_in=config.bert_hid_size, n_out=config.biaffine_size, dropout=config.out_dropout)
         self.mlp2 = MLP(n_in=config.bert_hid_size, n_out=config.biaffine_size, dropout=config.out_dropout)
-        self.biaffine = Biaffine(n_in=config.biaffine_size, n_out=config.label_num, bias_x=True, bias_y=True)
+        self.biaffine1 = Biaffine(n_in=config.biaffine_size, n_out=config.label_num, bias_x=True, bias_y=True)
+        self.biaffine2 = Biaffine(n_in=config.biaffine_size, n_out=10, bias_x=True, bias_y=True)
         self.dropout = nn.Dropout(config.out_dropout)
         self.conv_layers = AlterConv(config.bert_hid_size, 512, config.dilation, config.label_num, config.conv_dropout)
         self.cln = LayerNorm(config.bert_hid_size, config.bert_hid_size, conditional=True)
@@ -323,14 +324,15 @@ class BaselineModel(nn.Module):
         word_reps, _ = torch.max(_bert_embs, dim=2)
 
         word_reps = self.dropout(word_reps)
-        cln = self.cln(word_reps.unsqueeze(2), word_reps)
-        outputs = self.conv_layers(cln)
+        #cln = self.cln(word_reps.unsqueeze(2), word_reps)
+        #outputs = self.conv_layers(cln)
 
-        #h = self.dropout(self.mlp1(word_reps))
-        #t = self.dropout(self.mlp2(word_reps))
-        #outputs = self.biaffine(h, t)
+        h = self.dropout(self.mlp1(word_reps))
+        t = self.dropout(self.mlp2(word_reps))
+        outputs1 = self.biaffine1(h, t)
+        outputs2 = self.biaffine2(h, t)
 
-        return outputs
+        return outputs1, outputs2
 
 class FocalLoss(torch.nn.Module):
     """ Focal Loss, as described in https://arxiv.org/abs/1708.02002.

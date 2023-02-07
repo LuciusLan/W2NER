@@ -53,7 +53,7 @@ class Vocabulary(object):
         return self.id2label[i]
 
 def custom_collate_fn(data):
-    bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text = map(list, zip(*data))
+    bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text, dir_labels = map(list, zip(*data))
 
     max_tok = np.max(sent_length)
     sent_length = torch.LongTensor(sent_length)
@@ -70,16 +70,18 @@ def custom_collate_fn(data):
     dist_inputs = fill(dist_inputs, dis_mat)
     labels_mat = torch.zeros((batch_size, max_tok, max_tok), dtype=torch.long)
     grid_labels = fill(grid_labels, labels_mat)
+    dir_labels_mat = torch.zeros((batch_size, max_tok, max_tok), dtype=torch.long)
+    dir_labels = fill(dir_labels, dir_labels_mat)
     mask2d_mat = torch.zeros((batch_size, max_tok, max_tok), dtype=torch.bool)
     grid_mask2d = fill(grid_mask2d, mask2d_mat)
     sub_mat = torch.zeros((batch_size, max_tok, max_pie), dtype=torch.bool)
     pieces2word = fill(pieces2word, sub_mat)
 
-    return bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text
+    return bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, dir_labels, entity_text
 
 
 class RelationDataset(Dataset):
-    def __init__(self, bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text):
+    def __init__(self, bert_inputs, grid_labels, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text, dir_labels):
         self.bert_inputs = bert_inputs
         self.grid_labels = grid_labels
         self.grid_mask2d = grid_mask2d
@@ -87,6 +89,7 @@ class RelationDataset(Dataset):
         self.dist_inputs = dist_inputs
         self.sent_length = sent_length
         self.entity_text = entity_text
+        self.dir_labels = dir_labels
 
     def __getitem__(self, item):
         return torch.LongTensor(self.bert_inputs[item]), \
@@ -95,7 +98,8 @@ class RelationDataset(Dataset):
                torch.LongTensor(self.pieces2word[item]), \
                torch.LongTensor(self.dist_inputs[item]), \
                self.sent_length[item], \
-               self.entity_text[item]
+               self.entity_text[item],\
+               torch.LongTensor(self.dir_labels[item])
 
     def __len__(self):
         return len(self.bert_inputs)
@@ -106,6 +110,7 @@ def process_bert(data, tokenizer, vocab):
     bert_inputs = []
     grid_labels = []
     grid_labels_boundary = []
+    dir_labels = []
     grid_mask2d = []
     dist_inputs = []
     entity_text = []
@@ -188,23 +193,23 @@ def process_bert(data, tokenizer, vocab):
                 min_index = divmod(local_window.argmin(), local_window.shape[1])
                 min_dir = -1
                 if min_index == (0,0):
-                    min_dir = 7
+                    min_dir = 2#7
                 elif min_index == (1,0):
-                    min_dir = 8
+                    min_dir = 3#8
                 elif min_index == (2,0):
-                    min_dir = 9
+                    min_dir = 4#9
                 elif min_index == (0,1):
-                    min_dir = 10
+                    min_dir = 5#10
                 elif min_index == (1,1):
-                    min_dir = -1
+                    min_dir = 1#-1
                 elif min_index == (2,1):
-                    min_dir = 11
+                    min_dir = 6#11
                 elif min_index == (0,2):
-                    min_dir = 12
+                    min_dir = 7#12
                 elif min_index == (1,2):
-                    min_dir = 13
+                    min_dir = 8#13
                 elif min_index == (2,2):
-                    min_dir = 14
+                    min_dir = 9#14
                 
                 if min_dir != -1:
                     dir_map[ir-1, ic-1] = min_dir
@@ -212,13 +217,14 @@ def process_bert(data, tokenizer, vocab):
         sent_length.append(length)
         bert_inputs.append(_bert_inputs)
         grid_labels.append(_grid_labels)
-        grid_labels_boundary.append(dir_map)
+        grid_labels_boundary.append(_grid_labels_boundary)
+        dir_labels.append(dir_map)
         grid_mask2d.append(_grid_mask2d)
         dist_inputs.append(_dist_inputs)
         pieces2word.append(_pieces2word)
         entity_text.append(_entity_text)
 
-    return bert_inputs, grid_labels_boundary, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text
+    return bert_inputs, grid_labels_boundary, grid_mask2d, pieces2word, dist_inputs, sent_length, entity_text, dir_labels
 
 
 def fill_vocab(vocab, dataset):
@@ -251,7 +257,7 @@ def load_data_bert(config):
     table.add_row(['test', len(test_data), test_ent_num])
     config.logger.info("\n{}".format(table))
 
-    config.label_num = len(vocab.label2id) + 8
+    config.label_num = len(vocab.label2id)
     config.vocab = vocab
 
     train_dataset = RelationDataset(*process_bert(train_data, tokenizer, vocab))
